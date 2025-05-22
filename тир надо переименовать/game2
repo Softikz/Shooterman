@@ -12,6 +12,7 @@ pg.mixer.init()
 shot_sound = pg.mixer.Sound("shot.wav")
 explosion_sound = pg.mixer.Sound("explosion.wav")
 boom_sound = pg.mixer.Sound('awp-sound.mp3')
+reload_sound = pg.mixer.Sound("reload.wav")
 
 # Константы
 WIDTH = 800
@@ -191,6 +192,7 @@ class Player(pg.sprite.Sprite):
                 return False
             self.reloading = True
             self.reload_start_time = pg.time.get_ticks()
+            reload_sound.play()
             return True
         return False
 
@@ -531,7 +533,7 @@ def draw_ui(surface, player, score):
     surface.blit(coins_text, (10, 50))
 
     if player.current_weapon == "pistol":
-        weapon_text = font.render(f"Пистолет: {player.bullets_in_magazine}/10", True, WHITE)
+        weapon_text = font.render(f"Патроны: {player.bullets_in_magazine}/10", True, WHITE)
         magazines_text = font.render(f"Магазины: {player.magazines}", True, WHITE)
     elif player.current_weapon == "rpg":
         weapon_text = font.render(f"РПГ: {player.bullets_in_magazine}/1", True, WHITE)
@@ -621,7 +623,6 @@ def game_level1(initial_coins=0):
                             if bullet:
                                 all_sprites.add(bullet)
                                 bullets.add(bullet)
-                                targets.add(bullet)
             elif event.type == KEYDOWN:
                 if event.key == K_ESCAPE:
                     global_coins = player.coins
@@ -641,14 +642,18 @@ def game_level1(initial_coins=0):
 
         hits = pg.sprite.groupcollide(bullets, targets, True, False)
         for bullet, target_list in hits.items():
-            for target in target_list:
-                if isinstance(bullet, RPGBullet):
-                    bullet.explode()
-                    if target.hit(bullet.damage):
-                        score += 10
-                        player.coins += 10
-                        target.kill()
-                else:
+            if isinstance(bullet, RPGBullet):
+                # Для RPG пуль вызываем взрыв и обрабатываем все цели в радиусе
+                bullet.explode()
+                # Начисляем очки за все пораженные цели
+                for group in bullet.groups():
+                    for target in group:
+                        if isinstance(target, Target) and target.hits >= 2:
+                            score += 10
+                            player.coins += 10
+            else:
+                # Обычные пули обрабатываем стандартно
+                for target in target_list:
                     if target.hit(bullet.damage):
                         score += 10
                         player.coins += 10
@@ -657,9 +662,9 @@ def game_level1(initial_coins=0):
         if len(targets) == 0:
             for _ in range(10):
                 target = Target(level=1)
-                all_sprites.add(target)
                 targets.add(target)
 
+                all_sprites.add(target)
         screen.blit(background_img, (0, 0))
         all_sprites.draw(screen)
         buy_button.draw(screen)
@@ -689,7 +694,12 @@ def game_level2(initial_coins=0):
 
     player = Player(initial_coins)
     player.switch_weapon("sniper")
-    player.sniper_ammo = 5
+
+    # Бесконечные патроны и отключение перезарядки
+    player.bullets_in_magazine = 9999
+    player.sniper_ammo = 9999
+    player.reloading = False
+
     all_sprites.add(player)
     all_sprites.add(player.weapon)
 
@@ -712,10 +722,15 @@ def game_level2(initial_coins=0):
                 sys.exit()
             elif event.type == MOUSEBUTTONDOWN:
                 if event.button == 1:
-                    bullet = player.shoot()
-                    if bullet:
-                        all_sprites.add(bullet)
-                        bullets.add(bullet)
+                    # Убираем проверку на наличие патронов
+                    bullet = Bullet(
+                        *player.weapon.get_muzzle_position(),
+                        player.weapon.angle,
+                        "sniper"
+                    )
+                    boom_sound.play()
+                    all_sprites.add(bullet)
+                    bullets.add(bullet)
             elif event.type == KEYDOWN:
                 if event.key == K_ESCAPE:
                     global_coins = player.coins
@@ -744,7 +759,6 @@ def game_level2(initial_coins=0):
         pg.display.flip()
         clock.tick(60)
     return
-
 
 def shop_screen(initial_coins=0):
     global global_coins, game_state
