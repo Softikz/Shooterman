@@ -14,6 +14,8 @@ explosion_sound = pg.mixer.Sound("explosion.wav")
 boom_sound = pg.mixer.Sound('awp-sound.mp3')
 reload_sound = pg.mixer.Sound("reload.wav")
 minigan_sound = pg.mixer.Sound('strelbaisminigana.wav')
+minigan_sound = pg.mixer.Sound('strelbaisminigana.wav')
+minigan_channel = None
 
 # Константы
 WIDTH = 800
@@ -35,7 +37,7 @@ SHOP = 3
 DUEL = 4
 
 screen = pg.display.set_mode((WIDTH, HEIGHT))
-pg.display.set_caption("Тир")
+pg.display.set_caption("Shooterman")
 clock = pg.time.Clock()
 
 # Глобальные переменные
@@ -56,7 +58,8 @@ rpg_img = pg.image.load("rpg.png").convert_alpha()
 minigun_img = pg.image.load("minigun.png").convert_alpha()
 sniper_img = pg.image.load("sniper.png").convert_alpha()
 explosion_img = pg.image.load("explosion.png").convert_alpha()
-
+bushes_img = pg.image.load("bushes.png").convert_alpha()
+dirt_img = pg.image.load("dirt.png").convert_alpha()
 
 class Button:
     def __init__(self, image, pos, text="", font_size=30, text_color=WHITE):
@@ -281,6 +284,9 @@ class Player(pg.sprite.Sprite):
         self.minigun_firing = False
         self.last_shot_time = 0
         self.minigun_fire_rate = 100
+        self.minigan_sound_playing = False
+        self.minigan_channel = None
+        self.minigun_was_firing = False
 
     def update(self):
         keys = pg.key.get_pressed()
@@ -316,6 +322,16 @@ class Player(pg.sprite.Sprite):
             bullet = Bullet(bullet_pos[0], bullet_pos[1], self.weapon.angle + random.uniform(-5, 5), "minigun")
             self.last_shot_time = pg.time.get_ticks()
             return bullet
+
+        if self.current_weapon == "minigun" and self.minigun_firing:
+            if not self.minigun_was_firing:
+                self.minigan_channel = minigan_sound.play(loops=-1)
+                self.minigun_was_firing = True
+        else:
+            if self.minigun_was_firing:
+                if self.minigan_channel:
+                    self.minigan_channel.stop()
+                self.minigun_was_firing = False
         return None
 
     def shoot(self):
@@ -331,6 +347,9 @@ class Player(pg.sprite.Sprite):
             elif self.current_weapon == "sniper":
                 boom_sound.play()
                 return Bullet(bullet_pos[0], bullet_pos[1], self.weapon.angle, "sniper")
+            elif self.current_weapon == "minigun":
+                minigan_sound.play()
+                return Bullet(bullet_pos[0], bullet_pos[1], self.weapon.angle, "minigun")
         elif self.bullets_in_magazine == 0 and not self.reloading:
             if (self.current_weapon == "pistol" and self.magazines > 0) or \
                     (self.current_weapon == "minigun" and self.minigun_ammo > 0) or \
@@ -534,8 +553,8 @@ class ShopMenu:
 
 class MainMenu:
     def __init__(self):
-        self.background = pg.Surface((WIDTH, HEIGHT))
-        self.background.fill((30, 30, 50))
+        # Загрузка фонового изображения
+        self.background = pg.image.load("dirt.png").convert_alpha()
 
         self.level1_button = Button(pg.Surface((300, 60)), (WIDTH // 2 - 150, HEIGHT // 2 - 100), "Уровень 1: Тир")
         self.level2_button = Button(pg.Surface((300, 60)), (WIDTH // 2 - 150, HEIGHT // 2), "Уровень 2: Тренировка")
@@ -543,11 +562,25 @@ class MainMenu:
         self.duel_button = Button(pg.Surface((300, 60)), (WIDTH // 2 - 150, HEIGHT // 2 + 200), "Дуэль")
 
         self.font = pg.font.SysFont(None, 72)
-        self.title = self.font.render("Тир", True, WHITE)
+        self.title = self.font.render("Shooterman", True, WHITE)
         self.title_rect = self.title.get_rect(center=(WIDTH // 2, HEIGHT // 4))
 
+        # Загрузка и позиционирование кустиков
+        self.left_bush = bushes_img
+        self.right_bush = pg.transform.flip(bushes_img, True, False)
+
+        # Позиционируем кустики так, чтобы они частично перекрывали название
+        self.left_bush_rect = self.left_bush.get_rect(right=self.title_rect.left + 40, centery=self.title_rect.centery)
+        self.right_bush_rect = self.right_bush.get_rect(left=self.title_rect.right - 40,
+                                                        centery=self.title_rect.centery)
+
     def draw(self, surface):
-        surface.blit(self.background, (0, 0))
+        # Отрисовка фонового изображения (растягиваем на весь экран)
+        surface.blit(pg.transform.scale(self.background, (WIDTH, HEIGHT)), (0, 0))
+
+        # Рисуем кустики перед названием, чтобы они его частично перекрывали
+        surface.blit(self.left_bush, self.left_bush_rect)
+        surface.blit(self.right_bush, self.right_bush_rect)
         surface.blit(self.title, self.title_rect)
         self.level1_button.draw(surface)
         self.level2_button.draw(surface)
@@ -989,7 +1022,6 @@ def main():
 
         pg.display.flip()
         clock.tick(60)
-
 
 if __name__ == "__main__":
     main()
