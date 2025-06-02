@@ -15,7 +15,10 @@ boom_sound = pg.mixer.Sound('awp-sound.mp3')
 reload_sound = pg.mixer.Sound("reload.wav")
 minigan_sound = pg.mixer.Sound('strelbaisminigana.wav')
 blast_sound = pg.mixer.Sound('blast.mp3')
-minigan_channel = None
+
+# Загрузка и запуск музыки
+pg.mixer.music.load('relax.wav')
+pg.mixer.music.play()  # Музыка играет один раз, далее будем контролировать вручную
 
 # Константы
 WIDTH = 800
@@ -62,11 +65,12 @@ bushes_img = pg.image.load("bushes.png").convert_alpha()
 dirt_img = pg.image.load("dirt.png").convert_alpha()
 drobovik_img = pg.image.load("drobovik.png").convert_alpha()
 
+# --- Объявление классов и функций ---
+
 class Button:
     def __init__(self, image, pos, text="", font_size=30, text_color=WHITE):
         self.image = image
-        self.rect = image.get_rect()
-        self.rect.topleft = pos
+        self.rect = image.get_rect(topleft=pos)
         self.text = text
         self.font_size = font_size
         self.text_color = text_color
@@ -75,13 +79,13 @@ class Button:
 
     def update_text(self):
         while True:
-            text_surf = self.font.render(self.text, True, self.text_color)
-            if text_surf.get_width() <= self.rect.width - 40:
+            self.text_surf = self.font.render(self.text, True, self.text_color)
+            if self.text_surf.get_width() <= self.rect.width - 10:
                 break
             self.font_size -= 1
             self.font = pg.font.SysFont(None, self.font_size)
-        self.text_surf = text_surf
-        self.text_rect = text_surf.get_rect(center=self.rect.center)
+
+        self.text_rect = self.text_surf.get_rect(center=self.rect.center)
 
     def is_clicked(self, pos):
         return self.rect.collidepoint(pos)
@@ -109,7 +113,6 @@ class WeaponDrobovik(pg.sprite.Sprite):
         dx = mouse_pos[0] - self.player.rect.centerx
         dy = mouse_pos[1] - self.player.rect.centery
         self.angle = math.degrees(math.atan2(-dy, dx))
-
         self.image = pg.transform.rotate(self.original_image, self.angle)
         self.rect = self.image.get_rect(center=self.calculate_position())
 
@@ -161,7 +164,6 @@ class Weapon(pg.sprite.Sprite):
         dx = mouse_pos[0] - self.player.rect.centerx
         dy = mouse_pos[1] - self.player.rect.centery
         self.angle = math.degrees(math.atan2(-dy, dx))
-
         self.image = pg.transform.rotate(self.original_image, self.angle)
         self.rect = self.image.get_rect(center=self.calculate_position())
 
@@ -193,6 +195,7 @@ class Bullet(pg.sprite.Sprite):
         self.angle = angle
         self.image = pg.transform.rotate(self.image, angle)
         self.mask = pg.mask.from_surface(self.image)
+        self.prev_pos = self.rect.center
 
         if weapon_type == "pistol":
             self.speed = 10
@@ -213,9 +216,9 @@ class Bullet(pg.sprite.Sprite):
         self.velocity.y = -math.sin(angle_rad) * self.speed
 
     def update(self):
+        self.prev_pos = self.rect.center
         self.rect.centerx += int(self.velocity.x)
         self.rect.centery += int(self.velocity.y)
-
         if (self.rect.right < 0 or self.rect.left > WIDTH or
                 self.rect.bottom < 0 or self.rect.top > HEIGHT):
             self.kill()
@@ -310,7 +313,8 @@ class Player(pg.sprite.Sprite):
         self.rect.centerx = 100
         self.rect.centery = HEIGHT // 2
         self.speed = 5
-        self.weapon = Weapon(self, "pistol", all_sprites)
+        self.weapon = None
+        self.switch_weapon("pistol")
         self.magazines = 5
         self.bullets_in_magazine = 10
         self.reloading = False
@@ -325,7 +329,6 @@ class Player(pg.sprite.Sprite):
         self.minigun_firing = False
         self.last_shot_time = 0
         self.minigun_fire_rate = 100
-        self.minigan_sound_playing = False
         self.minigan_channel = None
         self.minigun_was_firing = False
         self.drobovik_unlocked = False
@@ -340,7 +343,8 @@ class Player(pg.sprite.Sprite):
             self.rect.x -= self.speed
         if keys[K_d] and self.rect.right < (self.barrier.rect.left if self.barrier else WIDTH):
             self.rect.x += self.speed
-        self.weapon.update()
+        if self.weapon:
+            self.weapon.update()
 
         if self.reloading:
             current_time = pg.time.get_ticks()
@@ -357,16 +361,12 @@ class Player(pg.sprite.Sprite):
                 elif self.current_weapon == "drobovik":
                     self.bullets_in_magazine = 5
 
-        if (self.current_weapon == "minigun" and
-                self.minigun_firing and
-                pg.time.get_ticks() - self.last_shot_time > self.minigun_fire_rate and
-                self.bullets_in_magazine > 0 and not self.reloading):
-            self.bullets_in_magazine -= 1
-            bullet_pos = self.weapon.get_muzzle_position()
-            bullet = Bullet(bullet_pos[0], bullet_pos[1], self.weapon.angle + random.uniform(-5, 5), "minigun")
-            self.last_shot_time = pg.time.get_ticks()
-            return bullet
-
+        # автоматическая стрельба для мингана
+        if self.current_weapon == "minigun" and self.minigun_firing:
+            bullet = self.update()
+            if bullet:
+                self.all_sprites.add(bullet)
+                # добавлять в группу bullets, если нужно
         if self.current_weapon == "minigun" and self.minigun_firing:
             if not self.minigun_was_firing:
                 self.minigan_channel = minigan_sound.play(loops=-1)
@@ -376,6 +376,7 @@ class Player(pg.sprite.Sprite):
                 if self.minigan_channel:
                     self.minigan_channel.stop()
                 self.minigun_was_firing = False
+
         return None
 
     def shoot(self):
@@ -397,17 +398,17 @@ class Player(pg.sprite.Sprite):
             elif self.current_weapon == "drobovik":
                 blast_sound.play()
                 bullets = []
-                for _ in range(5):  # 5 пуль за выстрел
-                    angle = self.weapon.angle + random.uniform(-15, 15)  # Разброс 15 градусов
-                    bullet = Bullet(bullet_pos[0], bullet_pos[1], angle, "drobovik")
-                    bullets.append(bullet)
+                for _ in range(5):
+                    angle = self.weapon.angle + random.uniform(-15, 15)
+                    bullets.append(Bullet(bullet_pos[0], bullet_pos[1], angle, "drobovik"))
                 return bullets
         elif self.bullets_in_magazine == 0 and not self.reloading:
+            # перезарядка
             if (self.current_weapon == "pistol" and self.magazines > 0) or \
-                    (self.current_weapon == "minigun" and self.minigun_ammo > 0) or \
-                    (self.current_weapon == "sniper" and self.sniper_ammo > 0) or \
-                    (self.current_weapon == "rpg" and self.rpg_ammo > 0) or \
-                    (self.current_weapon == "drobovik" and self.drobovik_ammo > 0):
+               (self.current_weapon == "minigun" and self.minigun_ammo > 0) or \
+               (self.current_weapon == "sniper" and self.sniper_ammo > 0) or \
+               (self.current_weapon == "rpg" and self.rpg_ammo > 0) or \
+               (self.current_weapon == "drobovik" and self.drobovik_ammo > 0):
                 self.reload()
         return None
 
@@ -439,9 +440,7 @@ class Player(pg.sprite.Sprite):
             "rpg": (50, 1),
             "drobovik": (50, 3)
         }
-
         cost, amount = weapon_costs.get(self.current_weapon, (100, 1))
-
         if self.coins >= cost:
             if self.current_weapon == "pistol":
                 self.magazines += amount
@@ -480,8 +479,8 @@ class Player(pg.sprite.Sprite):
         return False
 
     def switch_weapon(self, weapon_type):
-        # Удаляем старое оружие, если оно существует
-        if hasattr(self, 'weapon') and self.weapon is not None:
+        # Удаление старого оружия
+        if hasattr(self, 'weapon') and self.weapon:
             if hasattr(self.weapon, 'kill'):
                 self.weapon.kill()
             if self.all_sprites and self.weapon in self.all_sprites:
@@ -505,7 +504,6 @@ class Player(pg.sprite.Sprite):
             self.weapon = WeaponDrobovik(self, self.all_sprites)
         else:
             self.weapon = None
-
         if hasattr(self, 'weapon') and self.weapon and self.all_sprites:
             self.all_sprites.add(self.weapon)
 
@@ -526,9 +524,7 @@ class Player(pg.sprite.Sprite):
             self.weapon.draw(surface)
 
     def update_duel(self, keys, is_player1):
-        """Метод для обновления позиции игрока в дуэльном режиме"""
         if is_player1:
-            # Управление для первого игрока (WASD)
             if keys[K_w] and self.rect.top > 0:
                 self.rect.y -= self.speed
             if keys[K_s] and self.rect.bottom < HEIGHT:
@@ -538,7 +534,6 @@ class Player(pg.sprite.Sprite):
             if keys[K_d] and self.rect.right < WIDTH // 2:
                 self.rect.x += self.speed
         else:
-            # Управление для второго игрока (стрелочки)
             if keys[K_UP] and self.rect.top > 0:
                 self.rect.y -= self.speed
             if keys[K_DOWN] and self.rect.bottom < HEIGHT:
@@ -569,20 +564,16 @@ class ShopMenu:
             surface.blit(title, (self.rect.x + 200, self.rect.y + 30))
             coins_text = font.render(f"Монеты: {player.coins}", True, YELLOW)
             surface.blit(coins_text, (self.rect.x + 220, self.rect.y + 70))
-
-            # Обновляем текст кнопок
+            # Обновление текста кнопок
             self.rpg_button.text = "Ракетница 500C"
             self.minigun_button.text = "Миниган 600C"
             self.sniper_button.text = "Снайперка 200C"
             self.drobovik_button.text = "Дробовик 150C"
-
-            # Обновляем отображение текста
             self.rpg_button.update_text()
             self.minigun_button.update_text()
             self.sniper_button.update_text()
             self.drobovik_button.update_text()
 
-            # Рисуем кнопки
             self.rpg_button.draw(surface)
             self.minigun_button.draw(surface)
             self.sniper_button.draw(surface)
@@ -592,13 +583,13 @@ class ShopMenu:
     def handle_event(self, event, player):
         if event.type == MOUSEBUTTONDOWN and event.button == 1:
             if self.rpg_button.is_clicked(event.pos):
-                if player.buy_weapon("rpg", 500):
+                if player.buy_weapon("rpg", 0):
                     player.switch_weapon("rpg")
             elif self.minigun_button.is_clicked(event.pos):
                 if player.buy_weapon("minigun", 0):
                     player.switch_weapon("minigun")
             elif self.sniper_button.is_clicked(event.pos):
-                if player.buy_weapon("sniper", 200):
+                if player.buy_weapon("sniper", 0):
                     player.switch_weapon("sniper")
             elif self.drobovik_button.is_clicked(event.pos):
                 if player.buy_weapon("drobovik", 0):
@@ -609,14 +600,14 @@ class ShopMenu:
 class MainMenu:
     def __init__(self):
         self.background = pg.image.load("dirt.png").convert_alpha()
-        self.level1_button = Button(pg.Surface((300, 60)), (WIDTH // 2 - 150, HEIGHT // 2 - 100), "Уровень 1: Тир")
-        self.level2_button = Button(pg.Surface((300, 60)), (WIDTH // 2 - 150, HEIGHT // 2), "Уровень 2: Тренировка")
-        self.shop_button = Button(pg.Surface((300, 60)), (WIDTH // 2 - 150, HEIGHT // 2 + 100), "Магазин")
-        self.duel_button = Button(pg.Surface((300, 60)), (WIDTH // 2 - 150, HEIGHT // 2 + 200), "Дуэль")
+        self.level1_button = Button(pg.Surface((300, 60)), (WIDTH//2 - 150, HEIGHT//2 - 100), "Уровень 1: Тир")
+        self.level2_button = Button(pg.Surface((300, 60)), (WIDTH//2 - 150, HEIGHT//2), "Уровень 2: Тренировка")
+        self.shop_button = Button(pg.Surface((300, 60)), (WIDTH//2 - 150, HEIGHT//2 + 100), "Магазин")
+        self.duel_button = Button(pg.Surface((300, 60)), (WIDTH//2 - 150, HEIGHT//2 + 200), "Дуэль")
 
         self.font = pg.font.SysFont(None, 72)
         self.title = self.font.render("Shooterman", True, WHITE)
-        self.title_rect = self.title.get_rect(center=(WIDTH // 2, HEIGHT // 4))
+        self.title_rect = self.title.get_rect(center=(WIDTH//2, HEIGHT//4))
 
         self.left_bush = bushes_img
         self.right_bush = pg.transform.flip(bushes_img, True, False)
@@ -649,10 +640,9 @@ def draw_ui(surface, player, score):
     font = pg.font.SysFont(None, 36)
     score_text = font.render(f"Счёт: {score}", True, WHITE)
     surface.blit(score_text, (10, 10))
-
     coins_text = font.render(f"Монеты: {player.coins}", True, WHITE)
     surface.blit(coins_text, (10, 50))
-
+    # Патроны и перезарядка
     if player.current_weapon == "pistol":
         weapon_text = font.render(f"Патроны: {player.bullets_in_magazine}/10", True, WHITE)
         magazines_text = font.render(f"Магазины: {player.magazines}", True, WHITE)
@@ -672,18 +662,17 @@ def draw_ui(surface, player, score):
     surface.blit(weapon_text, (10, 90))
     surface.blit(magazines_text, (10, 130))
 
+    # Перезарядка
     if player.reloading:
         current_time = pg.time.get_ticks()
         elapsed = current_time - player.reload_start_time
         reload_percentage = min(elapsed / RELOAD_TIME, 1.0)
-
         pg.draw.rect(surface, GRAY, (10, 170, 200, 20))
         pg.draw.rect(surface, GREEN, (10, 170, 200 * reload_percentage, 20))
-
         reload_font = pg.font.SysFont(None, 24)
         reload_text = reload_font.render("Перезарядка", True, WHITE)
-        reload_text_rect = reload_text.get_rect(center=(110, 180))
-        surface.blit(reload_text, reload_text_rect)
+        reload_rect = reload_text.get_rect(center=(110, 180))
+        surface.blit(reload_text, reload_rect)
 
 class Barrier(pg.sprite.Sprite):
     def __init__(self):
@@ -694,7 +683,9 @@ class Barrier(pg.sprite.Sprite):
         self.rect.y = 0
         self.rect.height = HEIGHT
 
+# --- Уровни ---
 def game_level1(initial_coins=0):
+    pg.mixer.stop()
     global global_coins, game_state
     all_sprites = pg.sprite.Group()
     bullets = pg.sprite.Group()
@@ -733,11 +724,11 @@ def game_level1(initial_coins=0):
                 if event.button == 1:
                     bullet = player.handle_event(event)
                     if bullet:
-                        if isinstance(bullet, list):  # Для дробовика возвращается список пуль
+                        if isinstance(bullet, list):
                             for b in bullet:
                                 all_sprites.add(b)
                                 bullets.add(b)
-                        else:  # Для других оружий - одна пуля
+                        else:
                             all_sprites.add(bullet)
                             bullets.add(bullet)
                     if shop_menu.visible:
@@ -756,16 +747,24 @@ def game_level1(initial_coins=0):
                     game_state = MENU
                     return
 
-        # Автоматическая стрельба для минигана
+        # Автоматическая стрельба для мингана
         if player.current_weapon == "minigun" and player.minigun_firing:
-            bullet = player.update()
+            bullet = player.shoot()
+            if bullet:
+                if isinstance(bullet, list):
+                    for b in bullet:
+                        all_sprites.add(b)
+                        bullets.add(b)
+                else:
+                    all_sprites.add(bullet)
+                    bullets.add(bullet)
             if bullet:
                 all_sprites.add(bullet)
-                bullets.add(bullet)
+                # добавить в группу bullets, если нужно
 
         all_sprites.update()
 
-        # Проверка столкновений пуль с мишенями
+        # Проверка попаданий пуль с мишенями
         for bullet in bullets.sprites():
             targets_hit = pg.sprite.spritecollide(bullet, targets, False, pg.sprite.collide_mask)
             for target in targets_hit:
@@ -779,16 +778,16 @@ def game_level1(initial_coins=0):
         # Проверка условий проигрыша
         if not game_over:
             if (player.bullets_in_magazine == 0 and not player.reloading and
-                    ((player.current_weapon == "pistol" and player.magazines == 0) or
-                     (player.current_weapon == "minigun" and player.minigun_ammo == 0) or
-                     (player.current_weapon == "sniper" and player.sniper_ammo == 0) or
-                     (player.current_weapon == "rpg" and player.rpg_ammo == 0) or
-                     (player.current_weapon == "drobovik" and player.drobovik_ammo == 0)) and
-                    player.coins < 50):
+                ((player.current_weapon == "pistol" and player.magazines == 0) or
+                 (player.current_weapon == "minigun" and player.minigun_ammo == 0) or
+                 (player.current_weapon == "sniper" and player.sniper_ammo == 0) or
+                 (player.current_weapon == "rpg" and player.rpg_ammo == 0) or
+                 (player.current_weapon == "drobovik" and player.drobovik_ammo == 0)) and
+                player.coins < 50):
                 game_over = True
                 lose_time = pg.time.get_ticks()
 
-        # Генерация новых мишеней
+        # Создаем новые цели
         if len(targets) == 0:
             for _ in range(10):
                 target = Target(level=1)
@@ -816,6 +815,7 @@ def game_level1(initial_coins=0):
         clock.tick(60)
 
 def game_level2(initial_coins=0):
+    pg.mixer.stop()
     global global_coins, game_state
     all_sprites = pg.sprite.Group()
     bullets = pg.sprite.Group()
@@ -856,7 +856,6 @@ def game_level2(initial_coins=0):
                     )
                     boom_sound.play()
                     all_sprites.add(bullet)
-                    bullets.add(bullet)
             elif event.type == KEYDOWN:
                 if event.key == K_ESCAPE:
                     global_coins = player.coins
@@ -890,10 +889,10 @@ def game_level2(initial_coins=0):
 
 def shop_screen(initial_coins=0):
     global global_coins, game_state
-    all_sprites = pg.sprite.Group()
-    player = Player(initial_coins, all_sprites)
     shop_menu = ShopMenu()
     shop_menu.visible = True
+    all_sprites = pg.sprite.Group()
+    player = Player(initial_coins, all_sprites)
 
     running = True
     while running:
@@ -924,11 +923,11 @@ def shop_screen(initial_coins=0):
         clock.tick(60)
 
 def game_duel():
+    pg.mixer.stop()
     global game_state
     all_sprites = pg.sprite.Group()
-    bullets_p1 = pg.sprite.Group()
-    bullets_p2 = pg.sprite.Group()
 
+    # Создаем двух игроков
     player1 = Player(all_sprites=all_sprites)
     player1.rect.center = (200, HEIGHT // 2)
     player1.switch_weapon("pistol")
@@ -954,25 +953,23 @@ def game_duel():
                 if event.key == K_ESCAPE:
                     game_state = MENU
                     return
-                elif event.key == K_r:  # Перезарядка игрока 1
+                elif event.key == K_r:
                     player1.reload()
-                elif event.key == K_m:  # Перезарядка игрока 2
+                elif event.key == K_m:
                     player2.reload()
-                elif event.key == K_SPACE:  # Выстрел игрока 1
+                elif event.key == K_SPACE:
                     bullet = player1.shoot()
                     if bullet:
-                        bullet.angle = 0  # Пули летят прямо
+                        bullet.angle = 0
                         all_sprites.add(bullet)
-                        bullets_p1.add(bullet)
-                elif event.key == K_RETURN:  # Выстрел игрока 2
+                elif event.key == K_RETURN:
                     bullet = player2.shoot()
                     if bullet:
-                        bullet.angle = 180  # Пули летят прямо в другую сторону
+                        bullet.angle = 180
                         all_sprites.add(bullet)
-                        bullets_p2.add(bullet)
 
-        # Управление игроком 1 (WASD)
         keys = pg.key.get_pressed()
+        # Управление для игрока 1
         if keys[K_w] and player1.rect.top > 0:
             player1.rect.y -= player1.speed
         if keys[K_s] and player1.rect.bottom < HEIGHT:
@@ -981,8 +978,7 @@ def game_duel():
             player1.rect.x -= player1.speed
         if keys[K_d] and player1.rect.right < WIDTH // 2:
             player1.rect.x += player1.speed
-
-        # Управление игроком 2 (стрелочки)
+        # Управление для игрока 2
         if keys[K_UP] and player2.rect.top > 0:
             player2.rect.y -= player2.speed
         if keys[K_DOWN] and player2.rect.bottom < HEIGHT:
@@ -994,9 +990,9 @@ def game_duel():
 
         all_sprites.update()
 
-        # Проверка столкновений игроков
+        # Столкновения
         if pg.sprite.collide_rect(player1, player2):
-            # Отталкивание при столкновении
+            # Простое отталкивание
             if player1.rect.centerx < player2.rect.centerx:
                 player1.rect.x -= 5
                 player2.rect.x += 5
@@ -1004,53 +1000,51 @@ def game_duel():
                 player1.rect.x += 5
                 player2.rect.x -= 5
 
-        # Проверка попаданий пуль игрока 1 в игрока 2
-        for bullet in bullets_p1:
-            if pg.sprite.collide_mask(bullet, player2):
+        # Проверка попаданий
+        for bullet in pg.sprite.Group().union(bullets_p1, bullets_p2):
+            if pg.sprite.collide_mask(bullet, player2) and bullet in bullets_p1:
                 player2.kill()
                 running = False
-            # Удаляем пулю при выходе за границы
-            if (bullet.rect.right < 0 or bullet.rect.left > WIDTH or
-                    bullet.rect.bottom < 0 or bullet.rect.top > HEIGHT):
-                bullet.kill()
-
-        # Проверка попаданий пуль игрока 2 в игрока 1
-        for bullet in bullets_p2:
-            if pg.sprite.collide_mask(bullet, player1):
+            if pg.sprite.collide_mask(bullet, player1) and bullet in bullets_p2:
                 player1.kill()
                 running = False
-            # Удаляем пулю при выходе за границы
+            # Удаление пуль за границами
             if (bullet.rect.right < 0 or bullet.rect.left > WIDTH or
-                    bullet.rect.bottom < 0 or bullet.rect.top > HEIGHT):
+                    bullet.rect.top > HEIGHT or bullet.rect.bottom < 0):
                 bullet.kill()
 
-        # Отрисовка
+        # Рисуем
         screen.fill(BLACK)
         pg.draw.rect(screen, WHITE, divider)
 
         font = pg.font.SysFont(None, 36)
-        p1_text = font.render("Игрок 1: WASD + SPACE", True, WHITE)
-        p2_text = font.render("Игрок 2: Стрелки + ENTER", True, WHITE)
-        reload1_text = font.render("R - перезарядка", True, WHITE)
-        reload2_text = font.render("M - перезарядка", True, WHITE)
-
-        screen.blit(p1_text, (10, 10))
-        screen.blit(p2_text, (WIDTH - 250, 10))
-        screen.blit(reload1_text, (10, 50))
-        screen.blit(reload2_text, (WIDTH - 250, 50))
+        screen.blit(font.render("Игрок 1: WASD + SPACE", True, WHITE), (10, 10))
+        screen.blit(font.render("Игрок 2: Стрелки + ENTER", True, WHITE), (WIDTH - 250, 10))
+        screen.blit(font.render("R - перезарядка 1", True, WHITE), (10, 50))
+        screen.blit(font.render("M - перезарядка 2", True, WHITE), (WIDTH - 250, 50))
 
         all_sprites.draw(screen)
         pg.display.flip()
         clock.tick(60)
 
+    # После выхода
     game_state = MENU
 
 def main():
     global global_coins, game_state
+    # В начале запускаем музыку
+    if not pg.mixer.music.get_busy():
+        pg.mixer.music.play(-1)
+
     main_menu = MainMenu()
 
     while True:
+        # Проверка, чтобы музыка играла
+        if not pg.mixer.music.get_busy():
+            pg.mixer.music.play(-1)
+
         if game_state == MENU:
+            main_menu.draw(screen)
             for event in pg.event.get():
                 if event.type == QUIT:
                     pg.quit()
@@ -1058,14 +1052,21 @@ def main():
                 new_state = main_menu.handle_event(event)
                 if new_state != MENU:
                     game_state = new_state
-            main_menu.draw(screen)
+            # Восстановить музыку при возвращении в меню
+            if not pg.mixer.music.get_busy():
+                pg.mixer.music.play(-1)
+
         elif game_state == LEVEL1:
+            pg.mixer.music.stop()
             game_level1(global_coins)
         elif game_state == LEVEL2:
+            pg.mixer.music.stop()
             game_level2(global_coins)
         elif game_state == SHOP:
+            pg.mixer.music.stop()
             shop_screen(global_coins)
         elif game_state == DUEL:
+            pg.mixer.music.stop()
             game_duel()
 
         pg.display.flip()
