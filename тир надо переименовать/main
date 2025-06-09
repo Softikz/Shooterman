@@ -156,10 +156,8 @@ class Weapon(pg.sprite.Sprite):
         self.angle = 0
         self.offset = (30, 10)
 
-        if self.all_sprites:
-            self.all_sprites.add(self)
-
     def update(self):
+        # Обновляем угол и позицию оружия относительно игрока
         mouse_pos = pg.mouse.get_pos()
         dx = mouse_pos[0] - self.player.rect.centerx
         dy = mouse_pos[1] - self.player.rect.centery
